@@ -118,7 +118,10 @@ class OpenMeteoSource(ElevationSource):
     """Fetch elevation from Open-Meteo (free, no API key required)."""
 
     API_URL = "https://api.open-meteo.com/v1/elevation"
-    GRID_SIZE = 30  # 30x30 = 900 points, chunked 100 at a time
+    GRID_SIZE = 30  # default: 30x30 = 900 points, chunked 100 at a time
+
+    def __init__(self, grid_size: int = 30):
+        self.GRID_SIZE = grid_size
 
     def fetch(
         self, north: float, south: float, east: float, west: float

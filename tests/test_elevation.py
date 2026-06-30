@@ -63,12 +63,11 @@ def test_elevation_cache_miss():
 
 @pytest.mark.network
 def test_open_meteo_fetch():
-    """Open-Meteo elevation API returns a GRID_SIZE×GRID_SIZE grid."""
-    source = OpenMeteoSource()
+    """Open-Meteo elevation API returns a grid_size×grid_size grid."""
+    source = OpenMeteoSource(grid_size=5)  # 25 points, 1 chunk — minimises rate-limit risk
     # Small bounding box around Sydney Opera House
     hf = source.fetch(north=-33.85, south=-33.86, east=151.22, west=151.21)
 
-    expected = OpenMeteoSource.GRID_SIZE
-    assert hf.data.shape == (expected, expected)
+    assert hf.data.shape == (5, 5)
     assert hf.source == "open-meteo"
     assert not np.all(np.isnan(hf.data))
