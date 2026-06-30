@@ -1,1 +1,4 @@
 .publish_config
+dist/
+build/
+*.egg-info/
