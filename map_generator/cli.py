@@ -15,6 +15,11 @@ from .url_parser import MapExtent, parse_google_maps_url
 
 def main() -> None:
     """Entry point: parse args and dispatch to appropriate handler."""
+    # Handle implicit 'generate' when URL is first arg (map-generator <url>)
+    argv = sys.argv[1:]
+    if argv and not argv[0].startswith("-") and ("maps" in argv[0] or "http" in argv[0]):
+        sys.argv = [sys.argv[0], "generate"] + argv
+
     parser = argparse.ArgumentParser(
         prog="map-generator",
         description="Convert Google Maps URLs to 3D-printable STL models",
@@ -82,20 +87,9 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Handle implicit 'generate' when URL is first arg (map-generator <url>)
     if not args.command:
-        # Check if first positional arg looks like a URL
-        if (
-            len(sys.argv) > 1
-            and not sys.argv[1].startswith("-")
-            and ("maps" in sys.argv[1] or "http" in sys.argv[1])
-        ):
-            sys.argv.insert(1, "generate")
-            main()
-        else:
-            parser.print_help()
-            sys.exit(1)
-        return
+        parser.print_help()
+        sys.exit(1)
 
     if args.command == "generate":
         _run_generate(
