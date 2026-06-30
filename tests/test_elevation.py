@@ -5,7 +5,14 @@ import tempfile
 import numpy as np
 import pytest
 
-from map_generator.elevation import ElevationCache, HeightField, OpenMeteoSource, OpenTopographySource
+from map_generator.elevation import (
+    ElevationCache,
+    GoogleElevationSource,
+    HeightField,
+    OpenElevationSource,
+    OpenMeteoSource,
+    OpenTopographySource,
+)
 
 
 def test_heightfield_creation():
@@ -71,6 +78,40 @@ def test_open_meteo_fetch():
     assert hf.data.shape == (5, 5)
     assert hf.source == "open-meteo"
     assert not np.all(np.isnan(hf.data))
+
+
+@pytest.mark.network
+def test_open_elevation_fetch():
+    """Open-Elevation (the third, fully independent keyless fallback) returns
+    a grid_size×grid_size grid for a real bounding box.
+    """
+    source = OpenElevationSource(grid_size=5)
+    hf = source.fetch(north=-33.85, south=-33.86, east=151.22, west=151.21)
+
+    assert hf.data.shape == (5, 5)
+    assert hf.source == "open-elevation"
+    assert not np.all(np.isnan(hf.data))
+
+
+@pytest.mark.network
+def test_google_elevation_fetch_near_warrawee_house():
+    """Google Elevation API returns real, finer-resolution data for the
+    actual house location (the corrected place-pin center, not the wide
+    camera viewport — see test_url_parser.py).
+    """
+    try:
+        source = GoogleElevationSource()
+    except RuntimeError:
+        pytest.skip("Google Elevation requires a key in the macOS Keychain")
+
+    hf = source.fetch(north=-33.7355, south=-33.7382, east=151.1148, west=151.1114, grid_size=5)
+
+    assert hf.data.shape == (5, 5)
+    assert hf.source == "google"
+    assert "Google" in hf.license
+    assert not np.all(np.isnan(hf.data))
+    # Real Sydney upper-north-shore elevation is well above sea level.
+    assert 50 < float(np.nanmean(hf.data)) < 200
 
 
 @pytest.mark.network

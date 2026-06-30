@@ -26,6 +26,88 @@ class HeightField:
     resolution_m: float  # Approximate ground resolution in meters
 
 
+class GoogleElevationSource:
+    """Fetch elevation from the Google Maps Platform Elevation API.
+
+    Requires a billed Google Cloud project with the Elevation API enabled
+    and an API key in the macOS Keychain. Unlike the open DEM sources, this
+    data is used under Google Maps Platform's commercial Terms of Service,
+    not a CC/ODbL license — callers must attribute "Powered by Google" per
+    https://cloud.google.com/maps-platform/terms.
+    """
+
+    API_URL = "https://maps.googleapis.com/maps/api/elevation/json"
+    TOS_NOTICE = "Google Maps Platform Elevation API — Powered by Google (see Maps Platform ToS)"
+
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key or self._keychain_key()
+        if not self.api_key:
+            raise RuntimeError(
+                "Google Elevation API requires a key in the macOS Keychain: "
+                "security add-generic-password -s map-generator-google-maps -w YOUR_KEY"
+            )
+
+    def _keychain_key(self) -> Optional[str]:
+        try:
+            result = subprocess.run(
+                ["security", "find-generic-password", "-s", "map-generator-google-maps", "-w"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip() or None
+        except Exception:
+            pass
+        return None
+
+    def fetch(
+        self, north: float, south: float, east: float, west: float, grid_size: int = 30
+    ) -> HeightField:
+        """Fetch an elevation grid via Google's batched point-elevation lookup."""
+        lat_samples = np.linspace(south, north, grid_size)
+        lon_samples = np.linspace(west, east, grid_size)
+        lats, lons = np.meshgrid(lat_samples, lon_samples, indexing="ij")
+        lat_flat, lon_flat = lats.flatten(), lons.flatten()
+
+        max_points = 300
+        elevations_list: list[float] = []
+        resolutions: list[float] = []
+
+        for i in range(0, len(lat_flat), max_points):
+            chunk_lats = lat_flat[i : i + max_points]
+            chunk_lons = lon_flat[i : i + max_points]
+            locations = "|".join(f"{lat:.6f},{lon:.6f}" for lat, lon in zip(chunk_lats, chunk_lons))
+
+            response = requests.get(
+                self.API_URL, params={"locations": locations, "key": self.api_key}, timeout=60
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("status") != "OK":
+                raise RuntimeError(
+                    f"Google Elevation API error: {payload.get('status')} "
+                    f"{payload.get('error_message', '')}"
+                )
+            for point in payload["results"]:
+                elevations_list.append(point["elevation"])
+                resolutions.append(point.get("resolution", 30.0))
+
+        elevations = np.array(elevations_list, dtype=np.float32).reshape(lats.shape)
+
+        return HeightField(
+            data=elevations,
+            north=north,
+            south=south,
+            east=east,
+            west=west,
+            crs="EPSG:4326",
+            source="google",
+            license=self.TOS_NOTICE,
+            resolution_m=max(resolutions) if resolutions else 30.0,
+        )
+
+
 class OpenTopographySource:
     """Fetch Copernicus GLO-30 DEM (~30 m) from OpenTopography API."""
 
@@ -177,6 +259,73 @@ class OpenMeteoSource:
             source="open-meteo",
             license="Open-Meteo elevation (CC0)",
             resolution_m=90,
+        )
+
+
+class OpenElevationSource:
+    """Fetch elevation from Open-Elevation (free, no API key; SRTM-based).
+
+    Used as a last-resort fallback when Open-Meteo's shared daily request
+    quota is exhausted — a real, observed failure mode (their API returns
+    "Daily API request limit exceeded" once exceeded, not a transient 429),
+    so a single keyless source isn't enough for reliability.
+    """
+
+    API_URL = "https://api.open-elevation.com/api/v1/lookup"
+    GRID_SIZE = 30
+
+    def __init__(self, grid_size: int = 30):
+        self.GRID_SIZE = grid_size
+
+    def fetch(
+        self, north: float, south: float, east: float, west: float
+    ) -> HeightField:
+        """Fetch elevation grid via Open-Elevation's bulk POST lookup."""
+        lat_samples = np.linspace(south, north, self.GRID_SIZE)
+        lon_samples = np.linspace(west, east, self.GRID_SIZE)
+        lats, lons = np.meshgrid(lat_samples, lon_samples, indexing="ij")
+
+        lat_flat = lats.flatten()
+        lon_flat = lons.flatten()
+
+        max_points = 300
+        elevations_list = []
+
+        for i in range(0, len(lat_flat), max_points):
+            chunk_lats = lat_flat[i : i + max_points]
+            chunk_lons = lon_flat[i : i + max_points]
+            locations = [
+                {"latitude": float(lat), "longitude": float(lon)}
+                for lat, lon in zip(chunk_lats, chunk_lons)
+            ]
+
+            response = None
+            for attempt in range(4):
+                response = requests.post(
+                    self.API_URL, json={"locations": locations}, timeout=60
+                )
+                if response.status_code != 429:
+                    break
+                time.sleep(5 * (2**attempt))
+            if response is None or response.status_code == 429:
+                raise RuntimeError("Open-Elevation API rate limit; retry later.")
+            response.raise_for_status()
+
+            result = response.json()
+            elevations_list.extend(point["elevation"] for point in result.get("results", []))
+
+        elevations = np.array(elevations_list, dtype=np.float32).reshape(lats.shape)
+
+        return HeightField(
+            data=elevations,
+            north=north,
+            south=south,
+            east=east,
+            west=west,
+            crs="EPSG:4326",
+            source="open-elevation",
+            license="Open-Elevation (SRTM-based, public domain)",
+            resolution_m=30,
         )
 
 

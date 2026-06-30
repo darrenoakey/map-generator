@@ -59,6 +59,15 @@ def parse_google_maps_url(url: str) -> MapExtent:
     center_lon = float(lon_str)
     value = float(value_str)
 
+    # A place URL also carries a `!3d<lat>!4d<lon>` marker for the pinned
+    # address itself, separate from the `@lat,lon,altm` camera viewport
+    # center. For a wide 3D view the two can be hundreds of metres apart —
+    # the pin is the real address, so prefer it when present.
+    pin_match = re.search(r"!3d(-?[\d.]+)!4d(-?[\d.]+)", url)
+    if pin_match:
+        center_lat = float(pin_match.group(1))
+        center_lon = float(pin_match.group(2))
+
     if unit == "m":
         altitude_m = value
     else:

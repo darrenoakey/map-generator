@@ -17,6 +17,8 @@ dependencies = [
     "trimesh>=4.12.0",
     "rasterio>=1.3.0",
     "matplotlib>=3.8.0",
+    "shapely>=2.0.0",
+    "mapbox_earcut>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +30,9 @@ dev = [
 
 [project.scripts]
 map-generator = "map_generator.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["map_generator*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -8,8 +8,18 @@ import math
 import sys
 from pathlib import Path
 
-from .elevation import ElevationCache, HeightField, OpenMeteoSource, OpenTopographySource
-from .mesh import MeshBuilder
+import trimesh
+
+from .buildings import fetch_buildings
+from .elevation import (
+    ElevationCache,
+    GoogleElevationSource,
+    HeightField,
+    OpenElevationSource,
+    OpenMeteoSource,
+    OpenTopographySource,
+)
+from .mesh import BuildingPlacementStats, MeshBuilder
 from .url_parser import MapExtent, parse_google_maps_url
 
 
@@ -45,9 +55,10 @@ def main() -> None:
     )
     gen_parser.add_argument(
         "--source",
-        choices=["auto", "opentopography", "open-meteo"],
+        choices=["auto", "google", "opentopography", "open-meteo", "open-elevation"],
         default="auto",
-        help="Elevation source: auto tries OpenTopography first (default: auto)",
+        help="Elevation source: auto tries Google (if a key is configured), then "
+        "OpenTopography, then Open-Meteo, then Open-Elevation (default: auto)",
     )
     gen_parser.add_argument(
         "--z-scale",
@@ -66,6 +77,34 @@ def main() -> None:
         type=float,
         default=100.0,
         help="Physical footprint side length in mm (default: 100.0)",
+    )
+    gen_parser.add_argument(
+        "--radius-m",
+        type=float,
+        default=None,
+        help="Override the ground extent half-width in metres (default: derived "
+        "from camera altitude). Use a small value (e.g. 150-300) to focus on a "
+        "single property and its immediate neighbours.",
+    )
+    gen_parser.add_argument(
+        "--buildings",
+        dest="buildings",
+        action="store_true",
+        default=True,
+        help="Extrude real building footprints onto the terrain (default: on)",
+    )
+    gen_parser.add_argument(
+        "--no-buildings",
+        dest="buildings",
+        action="store_false",
+        help="Skip building footprints; terrain only",
+    )
+    gen_parser.add_argument(
+        "--building-source",
+        choices=["auto", "microsoft", "osm"],
+        default="auto",
+        help="Building footprint source: auto tries Microsoft's dataset first, "
+        "falling back to OpenStreetMap (default: auto)",
     )
     gen_parser.add_argument(
         "--no-cache",
@@ -98,17 +137,7 @@ def main() -> None:
         sys.exit(1)
 
     if args.command == "generate":
-        _run_generate(
-            args.url,
-            args.output,
-            args.source,
-            args.z_scale,
-            args.base_mm,
-            args.print_mm,
-            args.no_cache,
-            args.verify,
-            args.verbose,
-        )
+        _run_generate(args)
     elif args.command == "inspect-url":
         _inspect_url(args.url)
 
@@ -140,7 +169,28 @@ def _fetch_elevation(
     west: float,
     verbose: bool,
 ) -> HeightField:
-    """Fetch elevation: auto tries OpenTopography then falls back to Open-Meteo."""
+    """Fetch elevation. auto cascades Google (best resolution, needs a billed
+    API key) -> OpenTopography (30 m, needs a real API key) -> Open-Meteo
+    (90 m, keyless) -> Open-Elevation (SRTM, keyless) — two independent
+    keyless fallbacks so one source's shared daily quota running out doesn't
+    block the tool entirely.
+    """
+    if source in ("auto", "google"):
+        try:
+            if verbose:
+                print("Fetching elevation from Google Maps Platform...")
+            hf = GoogleElevationSource().fetch(north, south, east, west)
+            if verbose:
+                print(f"  {hf.data.shape[0]}x{hf.data.shape[1]} grid at {hf.resolution_m:.1f} m/px")
+            return hf
+        except Exception as exc:
+            if source == "google":
+                raise
+            print(
+                f"Google Elevation unavailable ({exc}); falling back to OpenTopography.",
+                file=sys.stderr,
+            )
+
     if source in ("auto", "opentopography"):
         try:
             if verbose:
@@ -157,66 +207,72 @@ def _fetch_elevation(
                 file=sys.stderr,
             )
 
+    if source in ("auto", "open-meteo"):
+        try:
+            if verbose:
+                print("Fetching elevation from Open-Meteo...")
+            hf = OpenMeteoSource().fetch(north, south, east, west)
+            if verbose:
+                print(f"  {hf.data.shape[0]}x{hf.data.shape[1]} grid at {hf.resolution_m} m/px")
+            return hf
+        except Exception as exc:
+            if source == "open-meteo":
+                raise
+            print(
+                f"Open-Meteo unavailable ({exc}); falling back to Open-Elevation.",
+                file=sys.stderr,
+            )
+
     if verbose:
-        print("Fetching elevation from Open-Meteo...")
-    hf = OpenMeteoSource().fetch(north, south, east, west)
+        print("Fetching elevation from Open-Elevation...")
+    hf = OpenElevationSource().fetch(north, south, east, west)
     if verbose:
         print(f"  {hf.data.shape[0]}x{hf.data.shape[1]} grid at {hf.resolution_m} m/px")
     return hf
 
 
-def _run_generate(
-    url: str,
-    output: str,
-    source: str,
-    z_scale: float,
-    base_mm: float,
-    print_mm: float,
-    no_cache: bool,
-    verify: bool,
-    verbose: bool,
-) -> None:
-    """Core pipeline: URL → elevation → mesh → STL + sidecar + preview."""
+def _run_generate(args: argparse.Namespace) -> None:
+    """Core pipeline: URL → elevation → buildings → mesh → STL + sidecar + preview."""
     try:
-        if verbose:
+        if args.verbose:
             print("Parsing Google Maps URL...")
-        extent = parse_google_maps_url(url)
-        if verbose:
+        extent = parse_google_maps_url(args.url)
+        if args.verbose:
             print(
                 f"Center: {extent.center_lat:.6f}, {extent.center_lon:.6f}  "
                 f"altitude {extent.altitude_m:.0f} m"
             )
 
-        north, south, east, west = extent.bbox_degrees()
+        north, south, east, west = _resolve_bbox(extent, args.radius_m)
         ground_km = (north - south) * 111.0
-        if verbose:
-            print(f"Ground extent: ~{ground_km:.2f} km (heuristic from altitude)")
+        if args.verbose:
+            print(f"Ground extent: ~{ground_km:.2f} km")
 
         cache = ElevationCache()
         heightfield: HeightField | None = None
 
-        if not no_cache:
-            if verbose:
+        if not args.no_cache:
+            if args.verbose:
                 print("Checking elevation cache...")
             heightfield = cache.get(north, south, east, west)
-            if heightfield and verbose:
+            if heightfield and args.verbose:
                 print(f"  Loaded from cache (original source: {heightfield.license})")
 
         if heightfield is None:
-            heightfield = _fetch_elevation(source, north, south, east, west, verbose)
-            if not no_cache:
+            heightfield = _fetch_elevation(args.source, north, south, east, west, args.verbose)
+            if not args.no_cache:
                 cache.store(heightfield)
-                if verbose:
+                if args.verbose:
                     print("  Cached for future runs")
 
         rows, cols = heightfield.data.shape
-        if verbose:
+        if args.verbose:
             print(f"Elevation grid: {rows}x{cols} ({heightfield.resolution_m} m/sample)")
 
         builder = MeshBuilder(
-            base_thickness_mm=base_mm,
-            print_size_mm=print_mm,
-            z_scale=z_scale,
+            base_thickness_mm=args.base_mm,
+            print_size_mm=args.print_mm,
+            z_scale=args.z_scale,
         )
         elev_range_m = builder.elevation_range_m(heightfield)
         if elev_range_m < 20.0:
@@ -226,34 +282,105 @@ def _run_generate(
                 file=sys.stderr,
             )
 
-        if verbose:
-            print("Building 3D mesh...")
+        if args.verbose:
+            print("Building terrain mesh...")
         mesh = builder.build(heightfield)
-        if verbose:
+
+        building_license = ""
+        building_stats: BuildingPlacementStats | None = None
+        if args.buildings:
+            building_license, building_stats, mesh = _add_buildings(
+                builder, heightfield, north, south, east, west, args.building_source, args.verbose, mesh
+            )
+
+        if args.verbose:
             print(
                 f"  {len(mesh.vertices):,} vertices, {len(mesh.faces):,} faces, "
                 f"watertight={mesh.is_watertight}"
             )
 
-        if verify:
+        if args.verify:
             _verify_mesh(mesh)
 
-        out_path = Path(output)
+        out_path = Path(args.output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         mesh.export(str(out_path))
         print(f"Saved STL: {out_path}")
 
-        sidecar = _write_sidecar(out_path, extent, heightfield, rows, cols, z_scale, base_mm, print_mm)
+        sidecar = _write_sidecar(
+            out_path, extent, heightfield, rows, cols, args.z_scale, args.base_mm, args.print_mm,
+            building_stats, building_license,
+        )
         print(f"Sidecar:   {sidecar}")
 
         preview = _write_preview(out_path, heightfield)
         print(f"Preview:   {preview}")
 
-        print(f"License:   {heightfield.license}")
+        print(f"Elevation license: {heightfield.license}")
+        if building_stats is not None:
+            print(f"Building license:  {building_license}")
 
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def _resolve_bbox(
+    extent: MapExtent, radius_m: float | None
+) -> tuple[float, float, float, float]:
+    """Resolve the fetch bounding box: --radius-m overrides the altitude heuristic."""
+    if radius_m is None:
+        return extent.bbox_degrees()
+    half_lat = radius_m / 111_000.0
+    half_lon = radius_m / (111_000.0 * math.cos(math.radians(extent.center_lat)))
+    return (
+        extent.center_lat + half_lat,
+        extent.center_lat - half_lat,
+        extent.center_lon + half_lon,
+        extent.center_lon - half_lon,
+    )
+
+
+def _add_buildings(
+    builder: MeshBuilder,
+    heightfield: HeightField,
+    north: float,
+    south: float,
+    east: float,
+    west: float,
+    building_source: str,
+    verbose: bool,
+    mesh: trimesh.Trimesh,
+) -> tuple[str, BuildingPlacementStats, trimesh.Trimesh]:
+    """Fetch real building footprints and extrude them onto the mesh."""
+    if verbose:
+        print("Fetching building footprints...")
+    try:
+        footprints, building_license = fetch_buildings(
+            north, south, east, west, source=building_source
+        )
+    except ValueError as exc:
+        print(f"Warning: skipping buildings ({exc})", file=sys.stderr)
+        return "", BuildingPlacementStats(0, 0, 0), mesh
+
+    if not footprints:
+        print(
+            "Warning: no real building footprints found in this area; "
+            "terrain only.",
+            file=sys.stderr,
+        )
+        return building_license, BuildingPlacementStats(0, 0, 0), mesh
+
+    building_meshes, stats = builder.build_buildings(heightfield, footprints)
+    if verbose:
+        print(
+            f"  {stats.placed} buildings placed ({building_license}); "
+            f"{stats.skipped_degenerate} skipped, "
+            f"{stats.estimated_height_count} used an estimated height"
+        )
+    if building_meshes:
+        mesh = trimesh.util.concatenate([mesh] + building_meshes)
+    return building_license, stats, mesh
 
 
 def _verify_mesh(mesh: object) -> None:
@@ -273,6 +400,8 @@ def _write_sidecar(
     z_scale: float,
     base_mm: float,
     print_mm: float,
+    building_stats: BuildingPlacementStats | None,
+    building_license: str,
 ) -> Path:
     """Write JSON sidecar alongside the STL."""
     sidecar_path = out_path.with_suffix(".json")
@@ -297,6 +426,16 @@ def _write_sidecar(
         "z_scale": z_scale,
         "base_thickness_mm": base_mm,
         "print_size_mm": print_mm,
+        "buildings": (
+            None
+            if building_stats is None
+            else {
+                "placed": building_stats.placed,
+                "skipped_degenerate": building_stats.skipped_degenerate,
+                "estimated_height_count": building_stats.estimated_height_count,
+                "license": building_license,
+            }
+        ),
     }
     with open(sidecar_path, "w") as f:
         json.dump(data, f, indent=2)
