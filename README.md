@@ -10,13 +10,22 @@ Paste in a Google Maps URL and get back a watertight STL file ready to send stra
 
 ## Requirements
 
-- Python 3.10 or higher
+- Python 3.9 or higher
+- pip
 
 ---
 
 ## Installation
 
 ```bash
+pip install map-generator
+```
+
+Or for development:
+
+```bash
+git clone https://github.com/darrenoakey/map-generator.git
+cd map-generator
 pip install -e .
 ```
 
@@ -24,63 +33,67 @@ pip install -e .
 
 ## Usage
 
+### Generate an STL from a Google Maps URL
+
 ```bash
-map-generator '<google-maps-url>' -o output.stl
+map-generator generate 'https://www.google.com/maps/place/...' -o output.stl
 ```
 
-The Google Maps URL should be a link to a location — copy it directly from your browser's address bar or from the Share menu in Google Maps.
+Or simply:
 
-### Options
+```bash
+map-generator 'https://www.google.com/maps/place/...' -o output.stl
+```
+
+### Inspect a URL without fetching elevation
+
+```bash
+map-generator inspect-url 'https://www.google.com/maps/place/...'
+```
+
+### Options for generate
 
 | Option | Description | Default |
 |---|---|---|
-| `--source` | Elevation data source (`opentopography` or `open-meteo`) | `opentopography` |
-| `--scale-z` | Vertical exaggeration factor — increase to make terrain features more pronounced | `1.0` |
-| `--base-thickness` | Thickness of the sealed base in millimetres | `3.0` |
-| `--wall-height` | Height of the perimeter wall in millimetres | `2.0` |
-| `-o` / `--output` | Output file path | `output.stl` |
+| `-o` / `--output` | Output STL file path | `map.stl` |
+| `--z-scale` | Vertical exaggeration factor (increase for more dramatic terrain) | `1.8` |
+| `--base-mm` | Sealed base thickness in millimetres | `4.0` |
+| `--print-mm` | Physical footprint side length in millimetres | `100.0` |
+| `--no-cache` | Skip elevation cache and fetch fresh data | (off) |
+| `--verify` | Print detailed mesh validation | (off) |
+| `-v` / `--verbose` | Verbose output during generation | (off) |
 
 ---
 
 ## Examples
 
-### Basic usage
-
-Generate an STL from a Google Maps URL with default settings:
+### Basic: Generate with default settings
 
 ```bash
-map-generator 'https://www.google.com/maps/place/Mount+Everest/@27.9881206,86.9249751,14z' -o everest.stl
+map-generator 'https://www.google.com/maps/place/Mount+Everest/@27.9881206,86.9249751,14z'
 ```
 
-### Exaggerate the terrain
-
-Increase vertical scale to make subtle terrain features stand out more when printed:
+### Exaggerate terrain for visual impact
 
 ```bash
 map-generator 'https://www.google.com/maps/place/Grand+Canyon/@36.0998,-113.8857,12z' \
-  --scale-z 2.5 \
+  --z-scale 3.0 \
   -o grand_canyon.stl
 ```
 
-### Thicker base for large prints
-
-Add a thicker base for a more stable print:
+### Create a larger print
 
 ```bash
 map-generator 'https://www.google.com/maps/place/Mount+Fuji/@35.3606,138.7274,13z' \
-  --base-thickness 6 \
-  --wall-height 4 \
+  --print-mm 150 \
+  --base-mm 6 \
   -o fuji.stl
 ```
 
-### Use an alternative elevation source
-
-Switch to Open-Meteo if you prefer or need a different data source:
+### Inspect a URL first
 
 ```bash
-map-generator 'https://www.google.com/maps/place/Scottish+Highlands/@57.1214,-4.7264,12z' \
-  --source open-meteo \
-  -o highlands.stl
+map-generator inspect-url 'https://www.google.com/maps/place/Warrawee/'
 ```
 
 ---
@@ -89,24 +102,34 @@ map-generator 'https://www.google.com/maps/place/Scottish+Highlands/@57.1214,-4.
 
 1. Open [Google Maps](https://maps.google.com) in your browser
 2. Navigate to the location you want
-3. Copy the URL from your browser's address bar
+3. Right-click and select "Share" or copy from the address bar
 
-The longer the URL, the more coordinate information it contains — using **Share → Copy link** from the Google Maps menu will give you the most precise URL.
+The tool works best with URLs containing altitude information (the `@lat,lon,altitude m/` part). Altitude helps calculate the correct viewport size for the 3D model.
+
+---
+
+## Data Sources
+
+**Primary**: Open-Meteo API (free, no key required)
+- Global elevation data at ~90m resolution
+- CC0 license
+
+The tool automatically handles elevation queries and caches results locally in `~/.cache/map-generator/` for future use.
 
 ---
 
 ## Output
 
-The generated `.stl` file is a watertight mesh ready for 3D printing. It includes:
+The generated `.stl` file contains:
 
-- A topographic surface matching the terrain at the selected location
-- A flat, sealed base
-- Perimeter walls connecting the terrain to the base
+- **Topographic surface**: Terrain matching the selected location
+- **Sealed flat base**: Watertight bottom for stable printing
+- **Perimeter walls**: Connect the terrain to the base
 
-Load the `.stl` directly into your slicer (e.g. PrusaSlicer, Cura, Bambu Studio) with no repairs needed.
+The mesh is validated as watertight and ready for 3D printing. Load directly into your slicer (PrusaSlicer, Cura, Bambu Studio, etc.) with no repairs needed.
 
 ---
 
 ## License
 
-CC BY-NC-4.0 — includes elevation data from Copernicus DEM. For personal and non-commercial use.
+MIT License. Elevation data from Open-Meteo is provided under CC0 (public domain).

@@ -1,15 +1,13 @@
-"""Elevation data sources: OpenTopography, Open-Meteo fallback, local cache."""
+"""Elevation data sources: Open-Meteo with local cache."""
 
 import json
-from abc import ABC, abstractmethod
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import rasterio
 import requests
-from rasterio.io import MemoryFile
 
 
 @dataclass
@@ -22,99 +20,12 @@ class HeightField:
     east: float
     west: float
     crs: str  # EPSG code, e.g., "EPSG:4326"
-    source: str  # "opentopography", "open-meteo", "cache"
+    source: str  # "open-meteo" or "cache"
     license: str  # Attribution/license string
     resolution_m: float  # Approximate ground resolution in meters
 
 
-class ElevationSource(ABC):
-    """Abstract elevation data provider."""
-
-    @abstractmethod
-    def fetch(
-        self, north: float, south: float, east: float, west: float
-    ) -> HeightField:
-        """Fetch elevation data for a bounding box."""
-
-
-class OpenTopographySource(ElevationSource):
-    """Fetch from OpenTopography Copernicus GLO-30 DEM (~30m resolution)."""
-
-    API_URL = "https://portal.opentopography.org/API/globaldem"
-
-    def __init__(self, api_key: Optional[str] = None):
-        """Initialize, reading API key from macOS Keychain if not provided."""
-        self.api_key = api_key or self._get_keychain_api_key()
-
-    def _get_keychain_api_key(self) -> Optional[str]:
-        """Retrieve API key from macOS Keychain."""
-        import subprocess
-
-        try:
-            result = subprocess.run(
-                [
-                    "security",
-                    "find-generic-password",
-                    "-s",
-                    "map-generator-opentopography",
-                    "-w",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode == 0:
-                return result.stdout.strip()
-        except Exception:
-            pass
-        return None
-
-    def fetch(
-        self, north: float, south: float, east: float, west: float
-    ) -> HeightField:
-        """Fetch Copernicus GLO-30 GeoTIFF for a bounding box."""
-        if not self.api_key:
-            raise ValueError(
-                "OpenTopography API key required. "
-                "Set via: security add-generic-password -s map-generator-opentopography -w <key>"
-            )
-
-        params = {
-            "demtype": "COP30",
-            "south": south,
-            "north": north,
-            "west": west,
-            "east": east,
-            "outputFormat": "GTiff",
-            "API_Key": self.api_key,
-        }
-
-        response = requests.get(self.API_URL, params=params, timeout=120)
-        response.raise_for_status()
-
-        # Check for API error in XML response body
-        content = response.content
-        if content.startswith(b"<?xml"):
-            raise ValueError(f"OpenTopography API error: {content.decode()[:200]}")
-
-        with MemoryFile(content) as memfile:
-            with memfile.open() as src:
-                data = src.read(1).astype(np.float32)
-
-        return HeightField(
-            data=data,
-            north=north,
-            south=south,
-            east=east,
-            west=west,
-            crs="EPSG:4326",
-            source="opentopography",
-            license="Copernicus DEM GLO-30 (CC BY 4.0)",
-            resolution_m=30,
-        )
-
-
-class OpenMeteoSource(ElevationSource):
+class OpenMeteoSource:
     """Fetch elevation from Open-Meteo (free, no API key required)."""
 
     API_URL = "https://api.open-meteo.com/v1/elevation"
@@ -127,8 +38,6 @@ class OpenMeteoSource(ElevationSource):
         self, north: float, south: float, east: float, west: float
     ) -> HeightField:
         """Fetch elevation grid via Open-Meteo point queries."""
-        import time
-
         lat_samples = np.linspace(south, north, self.GRID_SIZE)
         lon_samples = np.linspace(west, east, self.GRID_SIZE)
         lats, lons = np.meshgrid(lat_samples, lon_samples, indexing="ij")
