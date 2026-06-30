@@ -5,7 +5,7 @@ import tempfile
 import numpy as np
 import pytest
 
-from map_generator.elevation import ElevationCache, HeightField, OpenMeteoSource
+from map_generator.elevation import ElevationCache, HeightField, OpenMeteoSource, OpenTopographySource
 
 
 def test_heightfield_creation():
@@ -71,3 +71,23 @@ def test_open_meteo_fetch():
     assert hf.data.shape == (5, 5)
     assert hf.source == "open-meteo"
     assert not np.all(np.isnan(hf.data))
+
+
+@pytest.mark.network
+def test_opentopography_fetch():
+    """OpenTopography COP30 returns a raster for the bounding box.
+
+    Skipped when only the placeholder 'demo' key is available (requires real API key).
+    """
+    source = OpenTopographySource()
+    if source.api_key == "demo":
+        pytest.skip("OpenTopography requires a real API key (not 'demo')")
+
+    # Small bounding box around Warrawee NSW
+    hf = source.fetch(north=-33.73, south=-33.74, east=151.12, west=151.10)
+
+    assert hf.source == "opentopography"
+    assert hf.data.ndim == 2
+    assert hf.data.shape[0] > 0 and hf.data.shape[1] > 0
+    assert not np.all(np.isnan(hf.data))
+    assert hf.resolution_m == 30

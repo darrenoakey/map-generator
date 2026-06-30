@@ -8,7 +8,7 @@ import math
 import sys
 from pathlib import Path
 
-from .elevation import ElevationCache, HeightField, OpenMeteoSource
+from .elevation import ElevationCache, HeightField, OpenMeteoSource, OpenTopographySource
 from .mesh import MeshBuilder
 from .url_parser import MapExtent, parse_google_maps_url
 
@@ -42,6 +42,12 @@ def main() -> None:
         "--output",
         default="map.stl",
         help="Output STL filename (default: map.stl)",
+    )
+    gen_parser.add_argument(
+        "--source",
+        choices=["auto", "opentopography", "open-meteo"],
+        default="auto",
+        help="Elevation source: auto tries OpenTopography first (default: auto)",
     )
     gen_parser.add_argument(
         "--z-scale",
@@ -95,6 +101,7 @@ def main() -> None:
         _run_generate(
             args.url,
             args.output,
+            args.source,
             args.z_scale,
             args.base_mm,
             args.print_mm,
@@ -125,9 +132,43 @@ def _inspect_url(url: str) -> None:
     print(f"Map type:  {extent.map_type}")
 
 
+def _fetch_elevation(
+    source: str,
+    north: float,
+    south: float,
+    east: float,
+    west: float,
+    verbose: bool,
+) -> HeightField:
+    """Fetch elevation: auto tries OpenTopography then falls back to Open-Meteo."""
+    if source in ("auto", "opentopography"):
+        try:
+            if verbose:
+                print("Fetching elevation from OpenTopography (COP30)...")
+            hf = OpenTopographySource().fetch(north, south, east, west)
+            if verbose:
+                print(f"  {hf.data.shape[0]}x{hf.data.shape[1]} grid at {hf.resolution_m} m/px")
+            return hf
+        except Exception as exc:
+            if source == "opentopography":
+                raise
+            print(
+                f"OpenTopography unavailable ({exc}); falling back to Open-Meteo.",
+                file=sys.stderr,
+            )
+
+    if verbose:
+        print("Fetching elevation from Open-Meteo...")
+    hf = OpenMeteoSource().fetch(north, south, east, west)
+    if verbose:
+        print(f"  {hf.data.shape[0]}x{hf.data.shape[1]} grid at {hf.resolution_m} m/px")
+    return hf
+
+
 def _run_generate(
     url: str,
     output: str,
+    source: str,
     z_scale: float,
     base_mm: float,
     print_mm: float,
@@ -135,7 +176,7 @@ def _run_generate(
     verify: bool,
     verbose: bool,
 ) -> None:
-    """Core pipeline: URL → elevation → mesh → STL + sidecar."""
+    """Core pipeline: URL → elevation → mesh → STL + sidecar + preview."""
     try:
         if verbose:
             print("Parsing Google Maps URL...")
@@ -149,7 +190,7 @@ def _run_generate(
         north, south, east, west = extent.bbox_degrees()
         ground_km = (north - south) * 111.0
         if verbose:
-            print(f"Ground extent: ~{ground_km:.2f} km")
+            print(f"Ground extent: ~{ground_km:.2f} km (heuristic from altitude)")
 
         cache = ElevationCache()
         heightfield: HeightField | None = None
@@ -158,16 +199,11 @@ def _run_generate(
             if verbose:
                 print("Checking elevation cache...")
             heightfield = cache.get(north, south, east, west)
-            if heightfield:
-                if verbose:
-                    print(f"  Loaded from cache (source: {heightfield.source})")
+            if heightfield and verbose:
+                print(f"  Loaded from cache (original source: {heightfield.license})")
 
         if heightfield is None:
-            if verbose:
-                print("Fetching elevation from Open-Meteo...")
-            heightfield = OpenMeteoSource().fetch(north, south, east, west)
-            if verbose:
-                print(f"  {heightfield.data.shape[0]}x{heightfield.data.shape[1]} grid")
+            heightfield = _fetch_elevation(source, north, south, east, west, verbose)
             if not no_cache:
                 cache.store(heightfield)
                 if verbose:
@@ -208,11 +244,12 @@ def _run_generate(
         print(f"Saved STL: {out_path}")
 
         sidecar = _write_sidecar(out_path, extent, heightfield, rows, cols, z_scale, base_mm, print_mm)
-        if verbose:
-            print(f"Sidecar:   {sidecar}")
+        print(f"Sidecar:   {sidecar}")
 
-        if verbose:
-            print(f"License:   {heightfield.license}")
+        preview = _write_preview(out_path, heightfield)
+        print(f"Preview:   {preview}")
+
+        print(f"License:   {heightfield.license}")
 
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -264,3 +301,23 @@ def _write_sidecar(
     with open(sidecar_path, "w") as f:
         json.dump(data, f, indent=2)
     return sidecar_path
+
+
+def _write_preview(out_path: Path, hf: HeightField) -> Path:
+    """Write hillshade preview PNG alongside the STL."""
+    import numpy as np
+
+    preview_path = out_path.with_suffix(".png")
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return preview_path
+
+    data = hf.data.astype(np.float32)
+    fig, ax = plt.subplots(figsize=(6, 6), dpi=100)
+    ax.imshow(data, origin="lower", cmap="terrain", interpolation="nearest")
+    ax.set_title(f"Elevation preview ({hf.source}, {hf.resolution_m} m/px)")
+    ax.axis("off")
+    fig.savefig(str(preview_path), bbox_inches="tight", pad_inches=0.1)
+    plt.close(fig)
+    return preview_path
