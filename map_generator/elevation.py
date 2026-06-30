@@ -1,6 +1,7 @@
-"""Elevation data sources: Open-Meteo with local cache."""
+"""Elevation data sources: OpenTopography, Open-Meteo fallback, local cache."""
 
 import json
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,9 +21,97 @@ class HeightField:
     east: float
     west: float
     crs: str  # EPSG code, e.g., "EPSG:4326"
-    source: str  # "open-meteo" or "cache"
+    source: str  # "opentopography", "open-meteo", or "cache"
     license: str  # Attribution/license string
     resolution_m: float  # Approximate ground resolution in meters
+
+
+class OpenTopographySource:
+    """Fetch Copernicus GLO-30 DEM (~30 m) from OpenTopography API."""
+
+    API_URL = "https://portal.opentopography.org/API/globaldem"
+
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key or self._keychain_key() or "demo"
+
+    def _keychain_key(self) -> Optional[str]:
+        try:
+            result = subprocess.run(
+                [
+                    "security",
+                    "find-generic-password",
+                    "-s",
+                    "map-generator-opentopography",
+                    "-w",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip() or None
+        except Exception:
+            pass
+        return None
+
+    def fetch(
+        self, north: float, south: float, east: float, west: float
+    ) -> HeightField:
+        """Fetch COP30 GeoTIFF for bounding box and return HeightField."""
+        import rasterio  # type: ignore[import-untyped]
+        from rasterio.io import MemoryFile  # type: ignore[import-untyped]
+
+        params = {
+            "demtype": "COP30",
+            "south": south,
+            "north": north,
+            "west": west,
+            "east": east,
+            "outputFormat": "GTiff",
+            "API_Key": self.api_key,
+        }
+        response = requests.get(self.API_URL, params=params, timeout=120)
+        response.raise_for_status()
+
+        content = response.content
+        if content[:5] in (b"<?xml", b"<html", b"<HTML"):
+            raise ValueError(
+                f"OpenTopography API error: {content.decode(errors='replace')[:300]}"
+            )
+
+        with MemoryFile(content) as memfile:
+            with memfile.open() as src:
+                data = src.read(1).astype(np.float32)
+
+        # Replace nodata sentinel (-9999 typical) with NaN then fill via nearest neighbour
+        data[data < -1000] = np.nan
+        if np.any(np.isnan(data)):
+            from scipy.ndimage import distance_transform_edt
+
+            nan_mask = np.isnan(data)
+            # distance_transform_edt operates on the "background" (False pixels),
+            # so invert: find the nearest valid (non-NaN) cell for each NaN cell.
+            _, indices = distance_transform_edt(  # type: ignore[misc]
+                nan_mask,
+                return_distances=True,
+                return_indices=True,
+            )
+            # indices shape: (2, rows, cols) — row and col of nearest valid cell
+            row_idx, col_idx = indices[0], indices[1]
+            data[nan_mask] = data[row_idx[nan_mask], col_idx[nan_mask]]
+            data = data.astype(np.float32)
+
+        return HeightField(
+            data=data,
+            north=north,
+            south=south,
+            east=east,
+            west=west,
+            crs="EPSG:4326",
+            source="opentopography",
+            license="Copernicus DEM GLO-30 (CC BY 4.0)",
+            resolution_m=30,
+        )
 
 
 class OpenMeteoSource:
