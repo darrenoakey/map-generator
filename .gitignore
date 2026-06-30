@@ -2,3 +2,10 @@
 dist/
 build/
 *.egg-info/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+output/
+local/
+.pytest_cache/

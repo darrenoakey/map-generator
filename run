@@ -1,0 +1,14 @@
+#!/bin/bash
+# Run script for map-generator
+set -e
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+VENV="$DIR/.venv"
+
+if [ ! -d "$VENV" ]; then
+    echo "Setting up virtual environment..."
+    python3.12 -m venv "$VENV"
+    "$VENV/bin/pip" install -q -e "$DIR[dev]"
+fi
+
+exec "$VENV/bin/map-generator" "$@"
