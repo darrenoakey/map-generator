@@ -2,82 +2,89 @@
 
 # map-generator
 
-Convert Google Maps URLs into 3D-printable STL models.
+Convert any Google Maps URL into a 3D-printable STL model of the real terrain.
 
 ## Overview
 
-**map-generator** takes a Google Maps URL for any location and generates a 3D-printable STL file of the terrain. Whether you want to print a topographic model of your hometown, a mountain range, or any geographic area visible on Google Maps, map-generator automates the entire process from URL to print-ready file.
+**map-generator** takes a Google Maps URL and generates a watertight STL file of the terrain, ready to send to your 3D printer. The tool automatically fetches real elevation data (OpenTopography Copernicus COP30 at 30 m/px with Open-Meteo as a keyless fallback), builds a printable mesh with a flat sealed base, and writes a hillshade preview PNG and a JSON sidecar alongside the STL.
+
+No Google terrain data is used — only open DEM sources.
 
 ## Installation
 
-### Requirements
-
-- Python 3.9 or higher
-
-### Install from source
-
-Clone the repository and install using pip:
-
 ```bash
-git clone https://github.com/darreno/map-generator.git
+git clone https://github.com/darrenoakey/map-generator.git
 cd map-generator
 pip install -e .
 ```
 
-To include mesh repair support:
+### Optional: OpenTopography API key (higher resolution)
+
+Store a free API key from [portal.opentopography.org](https://portal.opentopography.org/) in the macOS Keychain:
 
 ```bash
-pip install -e ".[repair]"
+security add-generic-password -s map-generator-opentopography -w YOUR_KEY
 ```
 
-### Quick run (no manual install)
-
-A convenience script is included that automatically sets up a virtual environment on first run:
-
-```bash
-./run [options]
-```
+Without a key the tool falls back to Open-Meteo automatically.
 
 ## Usage
 
 ```
-map-generator [OPTIONS] URL
+map-generator generate <URL> [OPTIONS]
+map-generator <URL> [OPTIONS]          # shorthand — 'generate' is implicit
+map-generator inspect-url <URL>        # dry-run: print coords/bbox without fetching
 ```
-
-### Arguments
-
-| Argument | Description |
-|----------|-------------|
-| `URL` | A Google Maps URL pointing to the area you want to generate |
 
 ### Options
 
-Run `map-generator --help` to see all available options.
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-o, --output` | `map.stl` | Output STL filename |
+| `--source` | `auto` | Elevation source: `auto` \| `opentopography` \| `open-meteo` |
+| `--z-scale` | `1.8` | Vertical exaggeration |
+| `--base-mm` | `4.0` | Sealed base thickness in mm |
+| `--print-mm` | `100.0` | Physical footprint side length in mm |
+| `--no-cache` | off | Skip elevation cache |
+| `--verify` | off | Print watertight/volume/Euler validation |
+| `-v, --verbose` | off | Verbose output |
 
 ## Examples
 
-Generate a 3D model from a Google Maps URL:
-
 ```bash
-map-generator "https://www.google.com/maps/@36.1069,-112.1129,12z"
+# Generate a model from a Google Maps URL
+map-generator 'https://www.google.com/maps/place/32+Mitchell+Cres,+Warrawee+NSW+2074/@-33.7368286,151.1084364,2934m/...' -o warrawee.stl
+
+# High z-scale for flat terrain
+map-generator 'https://maps.google.com/...' -o flat_area.stl --z-scale 4.0
+
+# Inspect URL without fetching elevation
+map-generator inspect-url 'https://maps.google.com/...'
 ```
 
-Using the included run script:
+## Output Files
 
-```bash
-./run "https://www.google.com/maps/@36.1069,-112.1129,12z"
-```
+Each run produces three files alongside the STL:
 
-Save the output to a specific file:
+| File | Description |
+|------|-------------|
+| `output.stl` | Watertight binary STL, flat sealed base, four walls, terrain surface |
+| `output.json` | Sidecar: bbox, elevation source/license, grid dims, scale params |
+| `output.png` | Hillshade preview of the elevation grid |
 
-```bash
-map-generator --output grand_canyon.stl "https://www.google.com/maps/@36.1069,-112.1129,12z"
-```
+The mesh is guaranteed watertight (trimesh `is_watertight=True`), has consistent outward normals, and positive volume — validated before writing.
 
-## Output
+## Elevation Sources
 
-The tool produces an `.stl` file that can be opened in any 3D printing slicer (such as PrusaSlicer, Cura, or Bambu Studio) and printed directly.
+| Source | Resolution | Key required |
+|--------|-----------|--------------|
+| OpenTopography Copernicus COP30 | ~30 m | Free account at portal.opentopography.org |
+| Open-Meteo | ~90 m | None |
+
+`--source auto` tries OpenTopography first and falls back to Open-Meteo if unavailable.
 
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under [CC BY-NC 4.0](https://darren-static.waft.dev/license) - free to use and modify, but no commercial use without permission.
+
+Elevation data: Copernicus DEM GLO-30 (CC BY 4.0) via OpenTopography; Open-Meteo elevation (CC0).
