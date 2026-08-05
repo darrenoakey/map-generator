@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run script for map-generator
-set -e
+set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV="$DIR/.venv"
@@ -11,4 +11,18 @@ if [ ! -d "$VENV" ]; then
     "$VENV/bin/pip" install -q -e "$DIR[dev]"
 fi
 
-exec "$VENV/bin/map-generator" "$@"
+case "${1:-serve}" in
+  check)
+    exec "$VENV/bin/python" -m pytest -W error
+    ;;
+  deploy)
+    exec "$VENV/bin/python" -m pytest -W error
+    ;;
+  serve|run)
+    shift || true
+    exec "$VENV/bin/map-generator" "$@"
+    ;;
+  *)
+    exec "$VENV/bin/map-generator" "$@"
+    ;;
+esac

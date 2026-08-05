@@ -59,9 +59,7 @@ class MeshBuilder:
         self.print_size_mm = print_size_mm
         self.z_scale = z_scale
 
-    def build(
-        self, heightfield: HeightField, scale_z: float | None = None
-    ) -> trimesh.Trimesh:
+    def build(self, heightfield: HeightField, scale_z: float | None = None) -> trimesh.Trimesh:
         """Build a watertight mesh from elevation data.
 
         Args:
@@ -127,8 +125,7 @@ class MeshBuilder:
 
         for footprint in footprints:
             local_xy = [
-                _latlon_to_local_mm(lat, lon, heightfield, self.print_size_mm)
-                for lat, lon in footprint.polygon
+                _latlon_to_local_mm(lat, lon, heightfield, self.print_size_mm) for lat, lon in footprint.polygon
             ]
             polygon = _clean_polygon(local_xy)
             if polygon is None:
@@ -188,9 +185,7 @@ def _build_geometry(
     gx, gy = np.meshgrid(ix, iy)
 
     top_verts = np.column_stack([gx.ravel(), gy.ravel(), z_top.ravel()])
-    base_verts = np.column_stack(
-        [gx.ravel(), gy.ravel(), np.full(n_top, base_z, dtype=np.float32)]
-    )
+    base_verts = np.column_stack([gx.ravel(), gy.ravel(), np.full(n_top, base_z, dtype=np.float32)])
     vertices = np.vstack([top_verts, base_verts]).astype(np.float32)
 
     faces = (
@@ -283,9 +278,7 @@ def _wall_east(rows: int, cols: int, n_top: int) -> list[list[int]]:
     return faces
 
 
-def _latlon_to_local_mm(
-    lat: float, lon: float, heightfield: HeightField, print_size_mm: float
-) -> tuple[float, float]:
+def _latlon_to_local_mm(lat: float, lon: float, heightfield: HeightField, print_size_mm: float) -> tuple[float, float]:
     """Project a (lat, lon) into the same local mm grid the terrain mesh uses.
 
     Matches _build_geometry's affine mapping exactly: x increases west→east,
@@ -323,9 +316,7 @@ def _clean_polygon(points: list[tuple[float, float]]) -> Polygon | None:
     return polygon
 
 
-def _sample_terrain_z(
-    z_top: np.ndarray, rows: int, cols: int, dx: float, dy: float, x_mm: float, y_mm: float
-) -> float:
+def _sample_terrain_z(z_top: np.ndarray, rows: int, cols: int, dx: float, dy: float, x_mm: float, y_mm: float) -> float:
     """Bilinear-sample the terrain top surface height at a local (x, y) in mm."""
     col_f = np.clip(x_mm / dx if dx else 0.0, 0, cols - 1)
     row_f = np.clip(y_mm / dy if dy else 0.0, 0, rows - 1)

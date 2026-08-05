@@ -19,6 +19,7 @@ dependencies = [
     "matplotlib>=3.8.0",
     "shapely>=2.0.0",
     "mapbox_earcut>=1.0.0",
+    "daz-secrets @ git+https://github.com/darrenoakey/daz-secrets.git@e32b6ff722ddd9704de4b1cd2b198353f2df845c#subdirectory=python",
 ]
 
 [project.optional-dependencies]

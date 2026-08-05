@@ -35,9 +35,7 @@ def test_parse_tile_filters_to_bbox(tmp_path):
         out.write(src.read())
 
     # Tight bbox around the house excludes the one fixture row ~5km away.
-    footprints = _parse_tile(
-        gz_path, north=-33.735, south=-33.738, east=151.115, west=151.111
-    )
+    footprints = _parse_tile(gz_path, north=-33.735, south=-33.738, east=151.115, west=151.111)
 
     assert len(footprints) == 4
     assert all(f.source == "microsoft" for f in footprints)
@@ -52,9 +50,7 @@ def test_parse_tile_excludes_far_building(tmp_path):
     with gzip.open(gz_path, "wt") as out, open(FIXTURE) as src:
         out.write(src.read())
 
-    footprints = _parse_tile(
-        gz_path, north=-33.730, south=-33.740, east=151.120, west=151.105
-    )
+    footprints = _parse_tile(gz_path, north=-33.730, south=-33.740, east=151.120, west=151.105)
     assert len(footprints) == 4  # not 5 — the far one stays out
 
 

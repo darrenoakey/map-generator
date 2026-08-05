@@ -21,8 +21,14 @@ def _make_heightfield(rows: int = 20, cols: int = 20, flat: bool = False) -> Hei
         data = np.clip(data, 0, 100)
     return HeightField(
         data=data,
-        north=10.0, south=5.0, east=20.0, west=15.0,
-        crs="EPSG:4326", source="test", license="CC0", resolution_m=30,
+        north=10.0,
+        south=5.0,
+        east=20.0,
+        west=15.0,
+        crs="EPSG:4326",
+        source="test",
+        license="CC0",
+        resolution_m=30,
     )
 
 
@@ -72,8 +78,9 @@ def test_mesh_z_scale():
 def test_elevation_range_m():
     """elevation_range_m returns correct real-unit range."""
     data = np.array([[10.0, 20.0], [30.0, 40.0]], dtype=np.float32)
-    hf = HeightField(data=data, north=1, south=0, east=1, west=0,
-                     crs="EPSG:4326", source="test", license="CC0", resolution_m=30)
+    hf = HeightField(
+        data=data, north=1, south=0, east=1, west=0, crs="EPSG:4326", source="test", license="CC0", resolution_m=30
+    )
     assert MeshBuilder().elevation_range_m(hf) == pytest.approx(30.0)
 
 
@@ -120,9 +127,7 @@ def test_build_buildings_sits_on_terrain_base():
 def test_build_buildings_skips_degenerate_polygon():
     """A degenerate (collapsed) footprint is skipped, not silently fabricated."""
     hf = _make_heightfield(flat=True)
-    degenerate = BuildingFootprint(
-        polygon=[(7.5, 17.5)] * 4, height_m=6.0, source="microsoft"
-    )
+    degenerate = BuildingFootprint(polygon=[(7.5, 17.5)] * 4, height_m=6.0, source="microsoft")
 
     meshes, stats = MeshBuilder().build_buildings(hf, [degenerate])
 

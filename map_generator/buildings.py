@@ -46,8 +46,10 @@ def quadkey_for(lat: float, lon: float, zoom: int) -> str:
 
 def _bbox_corners(north: float, south: float, east: float, west: float):
     return [
-        (north, west), (north, east),
-        (south, west), (south, east),
+        (north, west),
+        (north, east),
+        (south, west),
+        (south, east),
         ((north + south) / 2, (east + west) / 2),
     ]
 
@@ -110,9 +112,7 @@ class MSBuildingFootprintSource:
             path.write_bytes(response.content)
         return path
 
-    def fetch(
-        self, north: float, south: float, east: float, west: float
-    ) -> list[BuildingFootprint]:
+    def fetch(self, north: float, south: float, east: float, west: float) -> list[BuildingFootprint]:
         """Fetch building footprints intersecting the bounding box."""
         diagonal_km = _bbox_diagonal_km(north, south, east, west)
         if diagonal_km > self.MAX_DIAGONAL_KM:
@@ -141,9 +141,7 @@ class MSBuildingFootprintSource:
         return footprints
 
 
-def _parse_tile(
-    path: Path, north: float, south: float, east: float, west: float
-) -> list[BuildingFootprint]:
+def _parse_tile(path: Path, north: float, south: float, east: float, west: float) -> list[BuildingFootprint]:
     """Parse a gzipped GeoJSONL building tile, filtered to the bounding box."""
     footprints = []
     with gzip.open(path, "rt") as f:
@@ -175,23 +173,34 @@ class OSMBuildingSource:
     (free, no API key required).
     """
 
-    API_URL = "https://overpass-api.de/api/interpreter"
+    API_URLS = (
+        "https://overpass-api.de/api/interpreter",
+        "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+        "https://overpass.private.coffee/api/interpreter",
+    )
     LICENSE = "OpenStreetMap contributors (ODbL)"
 
-    def fetch(
-        self, north: float, south: float, east: float, west: float
-    ) -> list[BuildingFootprint]:
+    def fetch(self, north: float, south: float, east: float, west: float) -> list[BuildingFootprint]:
         """Fetch building footprints intersecting the bounding box."""
-        query = (
-            f'[out:json][timeout:25];way["building"]({south},{west},{north},{east});out geom;'
-        )
-        response = requests.post(
-            self.API_URL,
-            data={"data": query},
-            headers={"User-Agent": "map-generator/0.1 (https://github.com/darrenoakey/map-generator)"},
-            timeout=60,
-        )
-        response.raise_for_status()
+        query = f'[out:json][timeout:25];way["building"]({south},{west},{north},{east});out geom;'
+        last_error: requests.RequestException | None = None
+        response: requests.Response | None = None
+        for api_url in self.API_URLS:
+            try:
+                candidate = requests.post(
+                    api_url,
+                    data={"data": query},
+                    headers={"User-Agent": "map-generator/0.1 (https://github.com/darrenoakey/map-generator)"},
+                    timeout=30,
+                )
+                candidate.raise_for_status()
+                response = candidate
+                break
+            except requests.RequestException as error:
+                last_error = error
+        if response is None:
+            assert last_error is not None
+            raise last_error
         elements = response.json().get("elements", [])
 
         footprints = []

@@ -1,7 +1,6 @@
 """Elevation data sources: OpenTopography, Open-Meteo fallback, local cache."""
 
 import json
-import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +8,18 @@ from typing import Optional
 
 import numpy as np
 import requests
+from daz_secrets import Client, DazSecretsError, ErrorCode
+
+
+def _credential(service: str) -> Optional[str]:
+    try:
+        return Client().get(service, "api-key").value.decode("utf-8")
+    except DazSecretsError as error:
+        if error.code is ErrorCode.NOT_FOUND:
+            return None
+        raise RuntimeError(f"Cannot read {service}/api-key credential") from error
+    except UnicodeDecodeError as error:
+        raise RuntimeError(f"Invalid UTF-8 in {service}/api-key credential") from error
 
 
 @dataclass
@@ -30,7 +41,7 @@ class GoogleElevationSource:
     """Fetch elevation from the Google Maps Platform Elevation API.
 
     Requires a billed Google Cloud project with the Elevation API enabled
-    and an API key in the macOS Keychain. Unlike the open DEM sources, this
+    and an API key in the daz-secrets provider. Unlike the open DEM sources, this
     data is used under Google Maps Platform's commercial Terms of Service,
     not a CC/ODbL license — callers must attribute "Powered by Google" per
     https://cloud.google.com/maps-platform/terms.
@@ -40,30 +51,13 @@ class GoogleElevationSource:
     TOS_NOTICE = "Google Maps Platform Elevation API — Powered by Google (see Maps Platform ToS)"
 
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or self._keychain_key()
+        self.api_key = api_key or _credential("map-generator-google-maps")
         if not self.api_key:
             raise RuntimeError(
-                "Google Elevation API requires a key in the macOS Keychain: "
-                "security add-generic-password -s map-generator-google-maps -w YOUR_KEY"
+                "Google Elevation API requires map-generator-google-maps/api-key in daz-secrets"
             )
 
-    def _keychain_key(self) -> Optional[str]:
-        try:
-            result = subprocess.run(
-                ["security", "find-generic-password", "-s", "map-generator-google-maps", "-w"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode == 0:
-                return result.stdout.strip() or None
-        except Exception:
-            pass
-        return None
-
-    def fetch(
-        self, north: float, south: float, east: float, west: float, grid_size: int = 30
-    ) -> HeightField:
+    def fetch(self, north: float, south: float, east: float, west: float, grid_size: int = 30) -> HeightField:
         """Fetch an elevation grid via Google's batched point-elevation lookup."""
         lat_samples = np.linspace(south, north, grid_size)
         lon_samples = np.linspace(west, east, grid_size)
@@ -79,15 +73,12 @@ class GoogleElevationSource:
             chunk_lons = lon_flat[i : i + max_points]
             locations = "|".join(f"{lat:.6f},{lon:.6f}" for lat, lon in zip(chunk_lats, chunk_lons))
 
-            response = requests.get(
-                self.API_URL, params={"locations": locations, "key": self.api_key}, timeout=60
-            )
+            response = requests.get(self.API_URL, params={"locations": locations, "key": self.api_key}, timeout=60)
             response.raise_for_status()
             payload = response.json()
             if payload.get("status") != "OK":
                 raise RuntimeError(
-                    f"Google Elevation API error: {payload.get('status')} "
-                    f"{payload.get('error_message', '')}"
+                    f"Google Elevation API error: {payload.get('status')} {payload.get('error_message', '')}"
                 )
             for point in payload["results"]:
                 elevations_list.append(point["elevation"])
@@ -114,33 +105,10 @@ class OpenTopographySource:
     API_URL = "https://portal.opentopography.org/API/globaldem"
 
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or self._keychain_key() or "demo"
+        self.api_key = api_key or _credential("map-generator-opentopography") or "demo"
 
-    def _keychain_key(self) -> Optional[str]:
-        try:
-            result = subprocess.run(
-                [
-                    "security",
-                    "find-generic-password",
-                    "-s",
-                    "map-generator-opentopography",
-                    "-w",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode == 0:
-                return result.stdout.strip() or None
-        except Exception:
-            pass
-        return None
-
-    def fetch(
-        self, north: float, south: float, east: float, west: float
-    ) -> HeightField:
+    def fetch(self, north: float, south: float, east: float, west: float) -> HeightField:
         """Fetch COP30 GeoTIFF for bounding box and return HeightField."""
-        import rasterio  # type: ignore[import-untyped]
         from rasterio.io import MemoryFile  # type: ignore[import-untyped]
 
         params = {
@@ -157,9 +125,7 @@ class OpenTopographySource:
 
         content = response.content
         if content[:5] in (b"<?xml", b"<html", b"<HTML"):
-            raise ValueError(
-                f"OpenTopography API error: {content.decode(errors='replace')[:300]}"
-            )
+            raise ValueError(f"OpenTopography API error: {content.decode(errors='replace')[:300]}")
 
         with MemoryFile(content) as memfile:
             with memfile.open() as src:
@@ -205,9 +171,7 @@ class OpenMeteoSource:
     def __init__(self, grid_size: int = 30):
         self.GRID_SIZE = grid_size
 
-    def fetch(
-        self, north: float, south: float, east: float, west: float
-    ) -> HeightField:
+    def fetch(self, north: float, south: float, east: float, west: float) -> HeightField:
         """Fetch elevation grid via Open-Meteo point queries."""
         lat_samples = np.linspace(south, north, self.GRID_SIZE)
         lon_samples = np.linspace(west, east, self.GRID_SIZE)
@@ -235,7 +199,7 @@ class OpenMeteoSource:
                 response = requests.get(self.API_URL, params=params, timeout=60)
                 if response.status_code != 429:
                     break
-                wait = 5 * (2 ** attempt)
+                wait = 5 * (2**attempt)
                 time.sleep(wait)
             if response is None or response.status_code == 429:
                 raise RuntimeError("Open-Meteo elevation API rate limit; retry later.")
@@ -277,9 +241,7 @@ class OpenElevationSource:
     def __init__(self, grid_size: int = 30):
         self.GRID_SIZE = grid_size
 
-    def fetch(
-        self, north: float, south: float, east: float, west: float
-    ) -> HeightField:
+    def fetch(self, north: float, south: float, east: float, west: float) -> HeightField:
         """Fetch elevation grid via Open-Elevation's bulk POST lookup."""
         lat_samples = np.linspace(south, north, self.GRID_SIZE)
         lon_samples = np.linspace(west, east, self.GRID_SIZE)
@@ -294,16 +256,11 @@ class OpenElevationSource:
         for i in range(0, len(lat_flat), max_points):
             chunk_lats = lat_flat[i : i + max_points]
             chunk_lons = lon_flat[i : i + max_points]
-            locations = [
-                {"latitude": float(lat), "longitude": float(lon)}
-                for lat, lon in zip(chunk_lats, chunk_lons)
-            ]
+            locations = [{"latitude": float(lat), "longitude": float(lon)} for lat, lon in zip(chunk_lats, chunk_lons)]
 
             response = None
             for attempt in range(4):
-                response = requests.post(
-                    self.API_URL, json={"locations": locations}, timeout=60
-                )
+                response = requests.post(self.API_URL, json={"locations": locations}, timeout=60)
                 if response.status_code != 429:
                     break
                 time.sleep(5 * (2**attempt))
@@ -341,9 +298,7 @@ class ElevationCache:
         """Generate a stable cache key from the bounding box."""
         return f"dem_{south:.4f}_{north:.4f}_{west:.4f}_{east:.4f}.json"
 
-    def get(
-        self, north: float, south: float, east: float, west: float
-    ) -> Optional[HeightField]:
+    def get(self, north: float, south: float, east: float, west: float) -> Optional[HeightField]:
         """Return cached HeightField if available, else None."""
         key = self._bbox_key(north, south, east, west)
         cache_file = self.cache_dir / key

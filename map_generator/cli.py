@@ -238,10 +238,7 @@ def _run_generate(args: argparse.Namespace) -> None:
             print("Parsing Google Maps URL...")
         extent = parse_google_maps_url(args.url)
         if args.verbose:
-            print(
-                f"Center: {extent.center_lat:.6f}, {extent.center_lon:.6f}  "
-                f"altitude {extent.altitude_m:.0f} m"
-            )
+            print(f"Center: {extent.center_lat:.6f}, {extent.center_lon:.6f}  altitude {extent.altitude_m:.0f} m")
 
         north, south, east, west = _resolve_bbox(extent, args.radius_m)
         ground_km = (north - south) * 111.0
@@ -277,8 +274,7 @@ def _run_generate(args: argparse.Namespace) -> None:
         elev_range_m = builder.elevation_range_m(heightfield)
         if elev_range_m < 20.0:
             print(
-                f"Warning: low relief ({elev_range_m:.1f} m). "
-                "Consider --z-scale 3.0+ for detail.",
+                f"Warning: low relief ({elev_range_m:.1f} m). Consider --z-scale 3.0+ for detail.",
                 file=sys.stderr,
             )
 
@@ -294,10 +290,7 @@ def _run_generate(args: argparse.Namespace) -> None:
             )
 
         if args.verbose:
-            print(
-                f"  {len(mesh.vertices):,} vertices, {len(mesh.faces):,} faces, "
-                f"watertight={mesh.is_watertight}"
-            )
+            print(f"  {len(mesh.vertices):,} vertices, {len(mesh.faces):,} faces, watertight={mesh.is_watertight}")
 
         if args.verify:
             _verify_mesh(mesh)
@@ -308,8 +301,16 @@ def _run_generate(args: argparse.Namespace) -> None:
         print(f"Saved STL: {out_path}")
 
         sidecar = _write_sidecar(
-            out_path, extent, heightfield, rows, cols, args.z_scale, args.base_mm, args.print_mm,
-            building_stats, building_license,
+            out_path,
+            extent,
+            heightfield,
+            rows,
+            cols,
+            args.z_scale,
+            args.base_mm,
+            args.print_mm,
+            building_stats,
+            building_license,
         )
         print(f"Sidecar:   {sidecar}")
 
@@ -325,9 +326,7 @@ def _run_generate(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
-def _resolve_bbox(
-    extent: MapExtent, radius_m: float | None
-) -> tuple[float, float, float, float]:
+def _resolve_bbox(extent: MapExtent, radius_m: float | None) -> tuple[float, float, float, float]:
     """Resolve the fetch bounding box: --radius-m overrides the altitude heuristic."""
     if radius_m is None:
         return extent.bbox_degrees()
@@ -356,17 +355,14 @@ def _add_buildings(
     if verbose:
         print("Fetching building footprints...")
     try:
-        footprints, building_license = fetch_buildings(
-            north, south, east, west, source=building_source
-        )
+        footprints, building_license = fetch_buildings(north, south, east, west, source=building_source)
     except ValueError as exc:
         print(f"Warning: skipping buildings ({exc})", file=sys.stderr)
         return "", BuildingPlacementStats(0, 0, 0), mesh
 
     if not footprints:
         print(
-            "Warning: no real building footprints found in this area; "
-            "terrain only.",
+            "Warning: no real building footprints found in this area; terrain only.",
             file=sys.stderr,
         )
         return building_license, BuildingPlacementStats(0, 0, 0), mesh
